@@ -1698,7 +1698,7 @@ class InterfazSoftwareFJ:
                 row=2, column=0, columnspan=2, sticky="w", padx=6, pady=5
             )
         elif tipo == "EQUIPO":
-            self.servicio_tarifa_etiqueta.set("Tarifa por hora")
+            self.servicio_tarifa_etiqueta.set("Tarifa por día")
             self.etiqueta_seguro.grid(
                 row=1, column=2, columnspan=2, sticky="w", padx=6, pady=5
             )
@@ -1873,7 +1873,7 @@ class InterfazSoftwareFJ:
                     proyector=self.servicio_proyector.get(),
                 )
             elif tipo == "EQUIPO":
-                parametros["tarifa_hora"] = tarifa
+                parametros["tarifa_dia"] = tarifa
             else:
                 parametros.update(
                     tarifa_hora=tarifa, nivel_consultor=self.servicio_nivel.get()
