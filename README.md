@@ -7,7 +7,7 @@ Trabajo colaborativo UNAD — curso Programación (213023). Sin bases de datos: 
 ## Cómo ejecutar
 
 ```bash
-python "prueba 2.0.py"
+python software_fj.py
 ```
 
 Al iniciar:

@@ -25,7 +25,7 @@ Estructura del módulo
  1. Configuración del sistema de logs.
  2. Jerarquía de excepciones personalizadas.
  3. `EntidadBase`      (clase abstracta general).
- 4. `Cliente`          (encapsulación estricta + validaciones).
+ 4. `Cliente`          (encapsulación con `_attr` + validaciones).
  5. `Servicio`         (clase abstracta) y tres derivadas especializadas:
                        `ReservaSala`, `AlquilerEquipo`, `AsesoriaEspecializada`.
  6. `EstadoReserva` y `Reserva` (máquina de estados).
@@ -35,9 +35,10 @@ Estructura del módulo
 
 Ejecución
 ---------
-    python "prueba 2.0.py"
+    python software_fj.py
 
-Al iniciar se ejecuta la simulación (>=10 operaciones) y luego se abre la GUI.
+Al iniciar se muestra un banner, se ejecuta la simulación (>=10 operaciones)
+y luego se abre la GUI. La simulación no pide confirmación interactiva.
 """
 
 import logging
@@ -171,8 +172,8 @@ class EntidadBase(ABC):
     Clase abstracta raíz de todas las entidades del dominio.
 
     Define los atributos comunes (identificador y fecha de creación),
-    protegidos mediante atributos "privados" (name mangling con doble guion
-    bajo) y expuestos solo en lectura mediante `@property`.
+    encapsulados con convención `_attr` (mismo estilo que `Servicio`/`Cliente`)
+    y expuestos solo en lectura mediante `@property`.
 
     Obliga a las clases hijas a implementar `obtener_detalles()`.
     """
@@ -188,18 +189,18 @@ class EntidadBase(ABC):
         if not isinstance(identificador, str) or not identificador.strip():
             raise DatoInvalidoError("El identificador de la entidad debe ser un texto no vacío.")
         # Atributos privados: solo accesibles por las propiedades de solo lectura.
-        self.__identificador: str = identificador.strip()
-        self.__fecha_creacion: datetime = datetime.now()
+        self._identificador: str = identificador.strip()
+        self._fecha_creacion: datetime = datetime.now()
 
     @property
     def identificador(self) -> str:
         """Identificador único (solo lectura)."""
-        return self.__identificador
+        return self._identificador
 
     @property
     def fecha_creacion(self) -> datetime:
         """Fecha y hora en que se creó el objeto (solo lectura)."""
-        return self.__fecha_creacion
+        return self._fecha_creacion
 
     @abstractmethod
     def obtener_detalles(self) -> Dict[str, Any]:
@@ -209,10 +210,10 @@ class EntidadBase(ABC):
         """
 
     def __str__(self) -> str:
-        return f"{type(self).__name__}({self.__identificador})"
+        return f"{type(self).__name__}({self._identificador})"
 
     def __repr__(self) -> str:
-        return f"<{type(self).__name__} id={self.__identificador!r}>"
+        return f"<{type(self).__name__} id={self._identificador!r}>"
 
 
 # =============================================================================
@@ -260,7 +261,7 @@ class Cliente(EntidadBase):
     @property
     def nombre(self) -> str:
         """Nombre completo del cliente."""
-        return self.__nombre
+        return self._nombre
 
     @nombre.setter
     def nombre(self, valor: str) -> None:
@@ -274,13 +275,13 @@ class Cliente(EntidadBase):
                 f"El nombre debe tener entre {self.NOMBRE_MIN} y {self.NOMBRE_MAX} "
                 f"caracteres (recibido: {len(limpio)})."
             )
-        self.__nombre = limpio
+        self._nombre = limpio
 
     # ---- correo -------------------------------------------------------------
     @property
     def correo(self) -> str:
         """Correo electrónico (siempre en minúsculas)."""
-        return self.__correo
+        return self._correo
 
     @correo.setter
     def correo(self, valor: str) -> None:
@@ -290,13 +291,13 @@ class Cliente(EntidadBase):
         limpio = valor.strip().lower()
         if not self._PATRON_CORREO.fullmatch(limpio):
             raise DatoInvalidoError(f"Formato de correo electrónico inválido: '{valor}'.")
-        self.__correo = limpio
+        self._correo = limpio
 
     # ---- teléfono -----------------------------------------------------------
     @property
     def telefono(self) -> str:
         """Teléfono (solo dígitos)."""
-        return self.__telefono
+        return self._telefono
 
     @telefono.setter
     def telefono(self, valor: Any) -> None:
@@ -309,7 +310,7 @@ class Cliente(EntidadBase):
                 f"El teléfono debe contener solo dígitos ({self.TELEFONO_MIN_DIGITOS} a "
                 f"{self.TELEFONO_MAX_DIGITOS}); recibido: '{valor}'."
             )
-        self.__telefono = limpio
+        self._telefono = limpio
 
     def obtener_detalles(self) -> Dict[str, Any]:
         """Implementación del método abstracto de `EntidadBase`."""
@@ -1966,17 +1967,30 @@ class InterfazSoftwareFJ:
         messagebox.showinfo("Reserva cancelada", "La reserva fue cancelada.", parent=self.root)
 
 
+def _mostrar_banner_inicio() -> None:
+    """Banner de arranque con instrucciones (sin pausa interactiva)."""
+    print("=" * 78)
+    print(" SOFTWARE FJ — Gestión de clientes, servicios y reservas")
+    print("=" * 78)
+    print(" 1) Se ejecuta automáticamente la simulación (>=10 operaciones).")
+    print(" 2) Luego se abre la interfaz gráfica (Tkinter).")
+    print(" 3) Eventos y errores se registran en software_fj.log")
+    print(" 4) Ejecución: python software_fj.py")
+    print("=" * 78)
+
+
 def main() -> None:
     """
     Punto de entrada del programa.
 
     [ESTRUCTURA try/except/finally]
-      - try    : ejecuta la simulación completa y luego abre la interfaz gráfica.
+      - try    : banner + simulación completa + interfaz gráfica.
       - except : red de seguridad final; registra cualquier fallo no previsto.
       - finally: cierra ordenadamente el sistema de logs.
     """
     root = None
     try:
+        _mostrar_banner_inicio()
         ejecutar_simulacion()
         root = tk.Tk()
         InterfazSoftwareFJ(root)

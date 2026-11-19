@@ -8,11 +8,11 @@ Comando usado (solo simulación, sin abrir la GUI):
 python -c "ejecutar_simulacion()"
 ```
 
-En la práctica se invocó ejecutar_simulacion() desde el módulo prueba 2.0.py.
+En la práctica se invocó ejecutar_simulacion() desde el módulo software_fj.py.
 La ejecución completa del entregable es:
 
 ```bash
-python "prueba 2.0.py"
+python software_fj.py
 ```
 
 ## Resultado observado
