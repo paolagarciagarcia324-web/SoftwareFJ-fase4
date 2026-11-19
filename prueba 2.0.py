@@ -8,8 +8,9 @@
 
 Descripción general
 -------------------
-Aplicación de consola desarrollada con Programación Orientada a Objetos (POO)
-que gestiona clientes, servicios y reservas de la empresa "Software FJ".
+Aplicación de consola y escritorio (Tkinter) desarrollada con Programación
+Orientada a Objetos (POO) que gestiona clientes, servicios y reservas de
+la empresa "Software FJ".
 
 Restricciones de diseño que cumple este programa
 ------------------------------------------------
@@ -30,18 +31,23 @@ Estructura del módulo
  6. `EstadoReserva` y `Reserva` (máquina de estados).
  7. `GestorFJ`         (almacenamiento en memoria y orquestación).
  8. Simulación de pruebas (más de 10 operaciones válidas e inválidas).
+ 9. `InterfazSoftwareFJ` (interfaz gráfica aportada/mejorada por el equipo).
 
 Ejecución
 ---------
-    python software_fj.py
+    python "prueba 2.0.py"
+
+Al iniciar se ejecuta la simulación (>=10 operaciones) y luego se abre la GUI.
 """
 
 import logging
 import math
 import re
+import tkinter as tk
 from abc import ABC, abstractmethod
 from datetime import datetime
 from enum import Enum
+from tkinter import messagebox, ttk
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
@@ -742,7 +748,15 @@ class AsesoriaEspecializada(Servicio):
 # =============================================================================
 
 class EstadoReserva(Enum):
-    """Estados posibles del ciclo de vida de una reserva."""
+    """
+    Máquina de estados de una reserva.
+
+    Transiciones permitidas:
+      - PENDIENTE  -> CONFIRMADA (solo si ya se calculó el costo)
+      - PENDIENTE  -> CANCELADA
+      - CONFIRMADA -> CANCELADA
+      - CANCELADA  es estado final (no admite nuevas transiciones)
+    """
     PENDIENTE = "PENDIENTE"
     CONFIRMADA = "CONFIRMADA"
     CANCELADA = "CANCELADA"
@@ -1298,6 +1312,10 @@ def ejecutar_simulacion() -> None:
              gestor.registrar_cliente, "Al", "al@correo.com", "3001112233")
     ejecutar("Registrar cliente con teléfono no numérico",
              gestor.registrar_cliente, "Marta Ruiz", "marta.ruiz@correo.com", "31A-456")
+    ejecutar("Registrar cliente con teléfono demasiado corto",
+             gestor.registrar_cliente, "Ana Cortés", "ana.cortes@correo.com", "123")
+    ejecutar("Registrar cliente con correo vacío",
+             gestor.registrar_cliente, "Luis Mora", "", "3009876543")
     ejecutar("Registrar cliente con correo duplicado",
              gestor.registrar_cliente, "Laura G.", "LAURA.GOMEZ@softwarefj.co", "3105559999")
 
@@ -1313,10 +1331,14 @@ def ejecutar_simulacion() -> None:
                         tarifa_hora=80000, nivel_consultor="SENIOR")
     ejecutar("Crear ReservaSala inválida (capacidad negativa)",
              gestor.crear_servicio, "SALA", nombre="Sala Fantasma", tarifa_hora=50000, capacidad=-5)
+    ejecutar("Crear ReservaSala inválida (tarifa <= 0)",
+             gestor.crear_servicio, "SALA", nombre="Sala Sin Tarifa", tarifa_hora=0, capacidad=8, proyector=False)
     ejecutar("Crear AlquilerEquipo inválido (rechaza el seguro obligatorio)",
              gestor.crear_servicio, "EQUIPO", nombre="Proyector 4K", tarifa_dia=30000, acepta_seguro=False)
     ejecutar("Crear AsesoriaEspecializada inválida (nivel inexistente)",
              gestor.crear_servicio, "ASESORIA", nombre="Asesoría Mágica", tarifa_hora=90000, nivel_consultor="GURU")
+    ejecutar("Crear servicio con tipo desconocido",
+             gestor.crear_servicio, "CONSULTORIA", nombre="Consultoría Genérica", tarifa_hora=50000)
     ejecutar("Crear servicio con parámetros incompletos (falta tarifa y capacidad)",
              gestor.crear_servicio, "SALA", nombre="Sala Incompleta")
 
@@ -1377,6 +1399,8 @@ def ejecutar_simulacion() -> None:
              gestor.deshabilitar_servicio, _id_de(equipo), "Mantenimiento correctivo")
     ejecutar("Reservar un equipo NO disponible",
              gestor.crear_reserva, _id_de(laura), _id_de(equipo), 2)
+    ejecutar("Cancelar reserva PENDIENTE sin confirmación previa",
+             gestor.cancelar_reserva, _id_de(reserva_sin_procesar), "Cliente desistió antes de confirmar")
     ejecutar("Cancelar reserva de sala ya confirmada",
              gestor.cancelar_reserva, _id_de(reserva_sala), "El cliente reprogramó su evento")
     ejecutar("Cancelar NUEVAMENTE la misma reserva (duplicada)",
@@ -1399,6 +1423,20 @@ def _imprimir_resumen(gestor: GestorFJ, ejecutor: EjecutorOperaciones) -> None:
     logger.info("Reservas creadas     : %d (intentos de reserva: %d)",
                 len(gestor.reservas), gestor.intentos_reserva)
 
+    logger.info("Detalle de clientes:")
+    for cliente in gestor.clientes:
+        d = cliente.obtener_detalles()
+        logger.info("  %s | %-24s | %-32s | %s",
+                    d["id"], d["nombre"], d["correo"], d["telefono"])
+
+    logger.info("Detalle de servicios:")
+    for servicio in gestor.servicios:
+        d = servicio.obtener_detalles()
+        logger.info("  %s | %-22s | %-34s | %-12s | disp=%s",
+                    d["id"], d.get("tipo", type(servicio).__name__), d["nombre"],
+                    formatear_moneda(d.get("tarifa_base")),
+                    "Sí" if d.get("disponible", servicio.disponible) else "No")
+
     logger.info("Detalle de reservas:")
     ingresos = 0.0
     for reserva in gestor.reservas:
@@ -1419,20 +1457,538 @@ def _imprimir_resumen(gestor: GestorFJ, ejecutor: EjecutorOperaciones) -> None:
     logger.info("=" * 78)
 
 
+class InterfazSoftwareFJ:
+    """
+    Interfaz gráfica (Tkinter) para registrar clientes, crear servicios y
+    gestionar reservas sobre un `GestorFJ` en memoria.
+
+    Aporte de interfaz del equipo (base Juan / mejora Bryan). Los datos de la
+    ventana son independientes de la simulación de consola: viven solo mientras
+    la GUI permanece abierta.
+    """
+
+    def __init__(self, root: tk.Tk) -> None:
+        """Construye pestañas de clientes, servicios y reservas sobre `root`."""
+        self.root = root
+        self.gestor = GestorFJ()
+        self.root.title("Software FJ | Gestión de servicios y reservas")
+        self.root.geometry("1050x700")
+        self.root.minsize(850, 580)
+
+        estilo = ttk.Style()
+        if "vista" in estilo.theme_names():
+            estilo.theme_use("vista")
+        estilo.configure("Treeview", rowheight=27)
+        estilo.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"))
+
+        encabezado = ttk.Frame(root, padding=(18, 14))
+        encabezado.pack(fill="x")
+        ttk.Label(encabezado, text="Software FJ", font=("Segoe UI", 20, "bold")).pack(anchor="w")
+        ttk.Label(
+            encabezado,
+            text="Administración de clientes, servicios y reservas",
+            font=("Segoe UI", 10),
+        ).pack(anchor="w", pady=(2, 0))
+        ttk.Label(
+            encabezado,
+            text=(
+                "Para empezar: registra un cliente, crea un servicio y luego una reserva. "
+                "En Reservas puedes calcular el costo, confirmar o cancelar. "
+                "Los datos se conservan solo durante esta ejecución."
+            ),
+            wraplength=950,
+            justify="left",
+        ).pack(anchor="w", pady=(8, 0))
+
+        self.pestanas = ttk.Notebook(root)
+        self.pestanas.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        self._crear_pestana_clientes()
+        self._crear_pestana_servicios()
+        self._crear_pestana_reservas()
+        self._actualizar_vistas()
+
+    def _crear_pestana_clientes(self) -> None:
+        pestana = ttk.Frame(self.pestanas, padding=16)
+        self.pestanas.add(pestana, text="Clientes")
+        formulario = ttk.LabelFrame(pestana, text="Registrar cliente", padding=12)
+        formulario.pack(fill="x", pady=(0, 14))
+
+        self.cliente_nombre = tk.StringVar()
+        self.cliente_correo = tk.StringVar()
+        self.cliente_telefono = tk.StringVar()
+        self._campo(formulario, "Nombre", 0, 0, self.cliente_nombre)
+        self._campo(formulario, "Correo", 0, 2, self.cliente_correo)
+        self._campo(formulario, "Teléfono", 1, 0, self.cliente_telefono)
+        ttk.Button(formulario, text="Registrar", command=self._registrar_cliente).grid(
+            row=1, column=3, padx=6, pady=5, sticky="e"
+        )
+        for columna in range(4):
+            formulario.columnconfigure(columna, weight=1)
+        self.tabla_clientes = self._crear_tabla(
+            pestana,
+            (("id", "ID", 100), ("nombre", "Nombre", 230), ("correo", "Correo", 260),
+             ("telefono", "Teléfono", 150)),
+        )
+
+    def _crear_pestana_servicios(self) -> None:
+        pestana = ttk.Frame(self.pestanas, padding=16)
+        self.pestanas.add(pestana, text="Servicios")
+        formulario = ttk.LabelFrame(pestana, text="Crear servicio", padding=12)
+        formulario.pack(fill="x", pady=(0, 14))
+
+        self.servicio_tipo = tk.StringVar(value="SALA")
+        self.servicio_nombre = tk.StringVar()
+        self.servicio_tarifa = tk.StringVar()
+        self.servicio_capacidad = tk.StringVar()
+        self.servicio_proyector = tk.BooleanVar(value=False)
+        self.servicio_nivel = tk.StringVar(value="JUNIOR")
+
+        ttk.Label(formulario, text="Tipo").grid(
+            row=0, column=0, sticky="w", padx=6, pady=5
+        )
+        self.servicio_tipo_combo = ttk.Combobox(
+            formulario, textvariable=self.servicio_tipo,
+            values=("SALA", "EQUIPO", "ASESORIA"),
+            state="readonly", width=20,
+        )
+        self.servicio_tipo_combo.grid(
+            row=0, column=1, sticky="ew", padx=6, pady=5
+        )
+        self.servicio_tipo_combo.bind(
+            "<<ComboboxSelected>>", self._actualizar_campos_servicio
+        )
+        self._campo(formulario, "Nombre", 0, 2, self.servicio_nombre)
+        self.servicio_tarifa_etiqueta = tk.StringVar(value="Tarifa por hora")
+        ttk.Label(formulario, textvariable=self.servicio_tarifa_etiqueta).grid(
+            row=1, column=0, sticky="w", padx=6, pady=5
+        )
+        ttk.Entry(formulario, textvariable=self.servicio_tarifa, width=24).grid(
+            row=1, column=1, sticky="ew", padx=6, pady=5
+        )
+
+        self.etiqueta_capacidad = ttk.Label(formulario, text="Capacidad (personas)")
+        self.entrada_capacidad = ttk.Entry(
+            formulario, textvariable=self.servicio_capacidad, width=24
+        )
+        self.check_proyector = ttk.Checkbutton(
+            formulario, text="Incluye proyector", variable=self.servicio_proyector
+        )
+        self.etiqueta_nivel = ttk.Label(formulario, text="Nivel del consultor")
+        self.selector_nivel = ttk.Combobox(
+            formulario, textvariable=self.servicio_nivel,
+            values=tuple(AsesoriaEspecializada.NIVELES),
+            state="readonly", width=20,
+        )
+        self.etiqueta_seguro = ttk.Label(
+            formulario, text="Seguro obligatorio: 8% (incluido automáticamente)."
+        )
+        ttk.Button(formulario, text="Crear servicio", command=self._crear_servicio).grid(
+            row=2, column=3, padx=6, pady=5, sticky="e"
+        )
+        for columna in range(4):
+            formulario.columnconfigure(columna, weight=1)
+        self._actualizar_campos_servicio()
+        self.tabla_servicios = self._crear_tabla(
+            pestana,
+            (("id", "ID", 90), ("tipo", "Tipo", 180), ("nombre", "Nombre", 250),
+             ("tarifa", "Tarifa base", 140), ("unidad", "Unidad", 80),
+             ("disponible", "Disponible", 100)),
+        )
+
+    def _crear_pestana_reservas(self) -> None:
+        pestana = ttk.Frame(self.pestanas, padding=16)
+        self.pestanas.add(pestana, text="Reservas")
+        formulario = ttk.LabelFrame(pestana, text="Crear reserva", padding=12)
+        formulario.pack(fill="x", pady=(0, 12))
+
+        self.reserva_cliente = tk.StringVar()
+        self.reserva_servicio = tk.StringVar()
+        self.reserva_duracion = tk.StringVar()
+        self.reserva_cliente_combo = ttk.Combobox(
+            formulario, textvariable=self.reserva_cliente, state="readonly", width=28,
+        )
+        self.reserva_servicio_combo = ttk.Combobox(
+            formulario, textvariable=self.reserva_servicio, state="readonly", width=28,
+        )
+        self.reserva_servicio_combo.bind(
+            "<<ComboboxSelected>>", self._actualizar_detalles_reserva
+        )
+        ttk.Label(formulario, text="Cliente").grid(
+            row=0, column=0, sticky="w", padx=6, pady=5
+        )
+        self.reserva_cliente_combo.grid(
+            row=0, column=1, sticky="ew", padx=6, pady=5
+        )
+        ttk.Label(formulario, text="Servicio").grid(
+            row=0, column=2, sticky="w", padx=6, pady=5
+        )
+        self.reserva_servicio_combo.grid(
+            row=0, column=3, sticky="ew", padx=6, pady=5
+        )
+        self.reserva_duracion_etiqueta = tk.StringVar(value="Duración")
+        ttk.Label(formulario, textvariable=self.reserva_duracion_etiqueta).grid(
+            row=1, column=0, sticky="w", padx=6, pady=5
+        )
+        ttk.Entry(formulario, textvariable=self.reserva_duracion).grid(
+            row=1, column=1, sticky="ew", padx=6, pady=5
+        )
+        ttk.Button(formulario, text="Crear reserva", command=self._crear_reserva).grid(
+            row=1, column=3, padx=6, pady=5, sticky="e"
+        )
+        for columna in range(4):
+            formulario.columnconfigure(columna, weight=1)
+        self.reserva_detalles_servicio = tk.StringVar(
+            value="Selecciona un servicio para consultar sus requisitos."
+        )
+        ttk.Label(
+            formulario, textvariable=self.reserva_detalles_servicio,
+            wraplength=800, justify="left",
+        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(10, 0))
+
+        opciones = ttk.LabelFrame(pestana, text="Procesamiento y estado", padding=10)
+        opciones.pack(fill="x", pady=(0, 12))
+        self.reserva_descuento = tk.StringVar(value="0")
+        self.reserva_iva = tk.BooleanVar(value=False)
+        self.reserva_urgente = tk.BooleanVar(value=False)
+        ttk.Label(opciones, text="Descuento (%)").pack(side="left")
+        ttk.Entry(opciones, textvariable=self.reserva_descuento, width=7).pack(
+            side="left", padx=(6, 14)
+        )
+        ttk.Checkbutton(opciones, text="Aplicar IVA (19%)", variable=self.reserva_iva).pack(
+            side="left", padx=5
+        )
+        ttk.Checkbutton(opciones, text="Urgente (+15%)", variable=self.reserva_urgente).pack(
+            side="left", padx=5
+        )
+        ttk.Button(opciones, text="Calcular costo", command=self._procesar_reserva).pack(
+            side="left", padx=(14, 4)
+        )
+        ttk.Button(opciones, text="Confirmar", command=self._confirmar_reserva).pack(
+            side="left", padx=4
+        )
+        ttk.Button(opciones, text="Cancelar", command=self._cancelar_reserva).pack(
+            side="left", padx=4
+        )
+        self.tabla_reservas = self._crear_tabla(
+            pestana,
+            (("id", "ID", 90), ("cliente", "Cliente", 200), ("servicio", "Servicio", 220),
+             ("duracion", "Duración", 100), ("estado", "Estado", 120), ("costo", "Costo total", 150)),
+        )
+
+    def _actualizar_campos_servicio(self, _evento: Optional[Any] = None) -> None:
+        """Muestra únicamente los datos específicos requeridos por el servicio."""
+        self.etiqueta_capacidad.grid_remove()
+        self.entrada_capacidad.grid_remove()
+        self.check_proyector.grid_remove()
+        self.etiqueta_nivel.grid_remove()
+        self.selector_nivel.grid_remove()
+        self.etiqueta_seguro.grid_remove()
+
+        tipo = self.servicio_tipo.get()
+        if tipo == "SALA":
+            self.servicio_tarifa_etiqueta.set("Tarifa por hora")
+            self.etiqueta_capacidad.grid(
+                row=1, column=2, sticky="w", padx=6, pady=5
+            )
+            self.entrada_capacidad.grid(
+                row=1, column=3, sticky="ew", padx=6, pady=5
+            )
+            self.check_proyector.grid(
+                row=2, column=0, columnspan=2, sticky="w", padx=6, pady=5
+            )
+        elif tipo == "EQUIPO":
+            self.servicio_tarifa_etiqueta.set("Tarifa por hora")
+            self.etiqueta_seguro.grid(
+                row=1, column=2, columnspan=2, sticky="w", padx=6, pady=5
+            )
+        else:
+            self.servicio_tarifa_etiqueta.set("Tarifa por hora")
+            self.etiqueta_nivel.grid(
+                row=1, column=2, sticky="w", padx=6, pady=5
+            )
+            self.selector_nivel.grid(
+                row=1, column=3, sticky="ew", padx=6, pady=5
+            )
+
+    def _servicio_reserva_seleccionado(self) -> Optional[Servicio]:
+        identificador = self.reserva_servicio.get().split(" - ", 1)[0]
+        return next(
+            (servicio for servicio in self.gestor.servicios
+             if servicio.identificador == identificador),
+            None,
+        )
+
+    def _actualizar_detalles_reserva(self, _evento: Optional[Any] = None) -> None:
+        """Actualiza unidad, rango y datos del servicio seleccionado."""
+        servicio = self._servicio_reserva_seleccionado()
+        if servicio is None:
+            self.reserva_duracion_etiqueta.set("Duración")
+            self.reserva_detalles_servicio.set(
+                "Selecciona un servicio para consultar sus requisitos."
+            )
+            return
+
+        self.reserva_duracion_etiqueta.set(f"Duración ({servicio.UNIDAD})")
+        detalles = (
+            f"Duración permitida: {servicio.DURACION_MIN:g} a "
+            f"{servicio.DURACION_MAX:g} {servicio.UNIDAD}."
+        )
+        if isinstance(servicio, ReservaSala):
+            especificos = (
+                f"Capacidad: {servicio.capacidad} personas. "
+                f"Proyector: {'incluido' if servicio.proyector else 'no incluido'}."
+            )
+        elif isinstance(servicio, AlquilerEquipo):
+            especificos = (
+                f"Seguro obligatorio incluido: {servicio.TASA_SEGURO:.0%}."
+            )
+        elif isinstance(servicio, AsesoriaEspecializada):
+            especificos = (
+                f"Nivel del consultor: {servicio.nivel_consultor} "
+                f"(multiplicador {servicio.multiplicador:g}x)."
+            )
+        else:
+            especificos = ""
+        self.reserva_detalles_servicio.set(f"{detalles} {especificos}".strip())
+
+    @staticmethod
+    def _campo(
+        contenedor: ttk.Frame, etiqueta: str, fila: int, columna: int,
+        variable: tk.StringVar,
+    ) -> ttk.Entry:
+        ttk.Label(contenedor, text=etiqueta).grid(
+            row=fila, column=columna, sticky="w", padx=6, pady=5
+        )
+        entrada = ttk.Entry(contenedor, textvariable=variable, width=24)
+        entrada.grid(
+            row=fila, column=columna + 1, sticky="ew", padx=6, pady=5
+        )
+        return entrada
+
+    @staticmethod
+    def _agregar_campo(
+        contenedor: ttk.Frame, etiqueta: str, entrada: ttk.Widget, columna: int
+    ) -> None:
+        ttk.Label(contenedor, text=etiqueta).grid(
+            row=0, column=columna, sticky="w", padx=(0, 8)
+        )
+        entrada.grid(
+            row=1, column=columna, sticky="ew", padx=(0, 8), pady=(4, 0)
+        )
+
+    @staticmethod
+    def _crear_tabla(
+        contenedor: ttk.Frame, columnas: Tuple[Tuple[str, str, int], ...]
+    ) -> ttk.Treeview:
+        tabla = ttk.Treeview(
+            contenedor,
+            columns=tuple(columna[0] for columna in columnas),
+            show="headings",
+            height=14,
+        )
+        for identificador, titulo, ancho in columnas:
+            tabla.heading(identificador, text=titulo)
+            tabla.column(identificador, width=ancho, minwidth=70, anchor="w")
+        barra = ttk.Scrollbar(contenedor, orient="vertical", command=tabla.yview)
+        tabla.configure(yscrollcommand=barra.set)
+        tabla.pack(side="left", fill="both", expand=True)
+        barra.pack(side="right", fill="y")
+        return tabla
+
+    @staticmethod
+    def _limpiar_tabla(tabla: ttk.Treeview) -> None:
+        tabla.delete(*tabla.get_children())
+
+    def _actualizar_vistas(self) -> None:
+        reservas_seleccionadas = self.tabla_reservas.selection()
+        self._limpiar_tabla(self.tabla_clientes)
+        for cliente in self.gestor.clientes:
+            self.tabla_clientes.insert(
+                "", "end", iid=cliente.identificador,
+                values=(cliente.identificador, cliente.nombre, cliente.correo, cliente.telefono),
+            )
+
+        self._limpiar_tabla(self.tabla_servicios)
+        for servicio in self.gestor.servicios:
+            self.tabla_servicios.insert(
+                "", "end", iid=servicio.identificador,
+                values=(
+                    servicio.identificador, type(servicio).__name__, servicio.nombre,
+                    formatear_moneda(servicio.tarifa_base), servicio.UNIDAD,
+                    "Sí" if servicio.disponible else "No",
+                ),
+            )
+
+        self._limpiar_tabla(self.tabla_reservas)
+        for reserva in self.gestor.reservas:
+            self.tabla_reservas.insert(
+                "", "end", iid=reserva.identificador,
+                values=(
+                    reserva.identificador, reserva.cliente.nombre, reserva.servicio.nombre,
+                    f"{reserva.duracion:g} {reserva.servicio.UNIDAD}", reserva.estado.value,
+                    formatear_moneda(reserva.costo_total),
+                ),
+            )
+        if reservas_seleccionadas and self.tabla_reservas.exists(reservas_seleccionadas[0]):
+            self.tabla_reservas.selection_set(reservas_seleccionadas[0])
+
+        clientes = [f"{c.identificador} - {c.nombre}" for c in self.gestor.clientes]
+        servicios = [
+            f"{s.identificador} - {s.nombre} ({s.UNIDAD})"
+            for s in self.gestor.servicios if s.disponible
+        ]
+        if hasattr(self, "reserva_cliente_combo"):
+            self.reserva_cliente_combo.configure(values=clientes)
+            self.reserva_servicio_combo.configure(values=servicios)
+            if self.reserva_servicio.get() not in servicios:
+                self.reserva_servicio.set("")
+            self._actualizar_detalles_reserva()
+
+    def _registrar_cliente(self) -> None:
+        try:
+            self.gestor.registrar_cliente(
+                self.cliente_nombre.get(), self.cliente_correo.get(), self.cliente_telefono.get()
+            )
+        except SoftwareFJException as error:
+            messagebox.showerror("No se pudo registrar el cliente", str(error), parent=self.root)
+            return
+        self.cliente_nombre.set("")
+        self.cliente_correo.set("")
+        self.cliente_telefono.set("")
+        self._actualizar_vistas()
+        messagebox.showinfo("Cliente registrado", "El cliente se registró correctamente.", parent=self.root)
+
+    def _crear_servicio(self) -> None:
+        try:
+            tipo = self.servicio_tipo.get()
+            parametros: Dict[str, Any] = {
+                "nombre": self.servicio_nombre.get(),
+            }
+            tarifa = float(self.servicio_tarifa.get())
+            if tipo == "SALA":
+                parametros.update(
+                    tarifa_hora=tarifa,
+                    capacidad=int(self.servicio_capacidad.get()),
+                    proyector=self.servicio_proyector.get(),
+                )
+            elif tipo == "EQUIPO":
+                parametros["tarifa_hora"] = tarifa
+            else:
+                parametros.update(
+                    tarifa_hora=tarifa, nivel_consultor=self.servicio_nivel.get()
+                )
+            self.gestor.crear_servicio(tipo, **parametros)
+        except (SoftwareFJException, ValueError) as error:
+            messagebox.showerror("No se pudo crear el servicio", str(error), parent=self.root)
+            return
+        self.servicio_nombre.set("")
+        self.servicio_tarifa.set("")
+        self.servicio_capacidad.set("")
+        self.servicio_proyector.set(False)
+        self._actualizar_vistas()
+        messagebox.showinfo("Servicio creado", "El servicio se creó correctamente.", parent=self.root)
+
+    def _crear_reserva(self) -> None:
+        try:
+            id_cliente = self.reserva_cliente.get().split(" - ", 1)[0]
+            id_servicio = self.reserva_servicio.get().split(" - ", 1)[0]
+            reserva = self.gestor.crear_reserva(
+                id_cliente, id_servicio, self.reserva_duracion.get()
+            )
+        except SoftwareFJException as error:
+            messagebox.showerror("No se pudo crear la reserva", str(error), parent=self.root)
+            return
+        except (ValueError, IndexError):
+            messagebox.showerror(
+                "Datos incompletos", "Selecciona un cliente y un servicio e indica la duración.",
+                parent=self.root,
+            )
+            return
+        self.reserva_duracion.set("")
+        self._actualizar_vistas()
+        self.tabla_reservas.selection_set(reserva.identificador)
+        messagebox.showinfo("Reserva creada", f"Se creó la reserva {reserva.identificador}.", parent=self.root)
+
+    def _reserva_seleccionada(self) -> Optional[Reserva]:
+        seleccion = self.tabla_reservas.selection()
+        if not seleccion:
+            messagebox.showwarning(
+                "Selecciona una reserva", "Selecciona una reserva de la tabla.", parent=self.root
+            )
+            return None
+        return self.gestor.buscar_reserva(seleccion[0])
+
+    def _procesar_reserva(self) -> None:
+        reserva = self._reserva_seleccionada()
+        if reserva is None:
+            return
+        try:
+            descuento = float(self.reserva_descuento.get()) / 100
+            costo = self.gestor.procesar_reserva(
+                reserva.identificador,
+                descuento=descuento,
+                aplicar_iva=self.reserva_iva.get(),
+                urgente=self.reserva_urgente.get(),
+            )
+        except (SoftwareFJException, ValueError) as error:
+            messagebox.showerror("No se pudo calcular el costo", str(error), parent=self.root)
+            return
+        self._actualizar_vistas()
+        messagebox.showinfo("Costo calculado", formatear_moneda(costo), parent=self.root)
+
+    def _confirmar_reserva(self) -> None:
+        reserva = self._reserva_seleccionada()
+        if reserva is None:
+            return
+        try:
+            self.gestor.confirmar_reserva(reserva.identificador)
+        except SoftwareFJException as error:
+            messagebox.showerror("No se pudo confirmar", str(error), parent=self.root)
+            return
+        self._actualizar_vistas()
+        messagebox.showinfo("Reserva confirmada", "La reserva fue confirmada.", parent=self.root)
+
+    def _cancelar_reserva(self) -> None:
+        reserva = self._reserva_seleccionada()
+        if reserva is None:
+            return
+        if not messagebox.askyesno(
+            "Cancelar reserva", f"¿Deseas cancelar la reserva {reserva.identificador}?",
+            parent=self.root,
+        ):
+            return
+        try:
+            self.gestor.cancelar_reserva(reserva.identificador, "Cancelada desde la interfaz")
+        except SoftwareFJException as error:
+            messagebox.showerror("No se pudo cancelar", str(error), parent=self.root)
+            return
+        self._actualizar_vistas()
+        messagebox.showinfo("Reserva cancelada", "La reserva fue cancelada.", parent=self.root)
+
+
 def main() -> None:
     """
     Punto de entrada del programa.
 
     [ESTRUCTURA try/except/finally]
-      - try    : ejecuta la simulación completa.
+      - try    : ejecuta la simulación completa y luego abre la interfaz gráfica.
       - except : red de seguridad final; registra cualquier fallo no previsto.
-      - finally: cierra ordenadamente el sistema de logs (vacía el archivo).
+      - finally: cierra ordenadamente el sistema de logs.
     """
+    root = None
     try:
         ejecutar_simulacion()
+        root = tk.Tk()
+        InterfazSoftwareFJ(root)
+        root.mainloop()
     except Exception as e:  # Red de seguridad: no debería activarse jamás.
-        logger.critical("Fallo crítico no controlado en la simulación: %s", e, exc_info=True)
+        logger.critical("Fallo crítico no controlado: %s", e, exc_info=True)
     finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except tk.TclError:
+                pass
         logger.info("Programa finalizado. Bitácora completa en '%s'.", ARCHIVO_LOG)
         logging.shutdown()
 
